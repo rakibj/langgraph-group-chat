@@ -23,3 +23,29 @@ export async function sendMessage(
   if (!res.ok) throw new Error(`chat request failed: ${res.status}`)
   return res.json()
 }
+
+export type ThreadSummary = {
+  thread_id: string
+  title: string
+  updated_at: string
+}
+
+export async function listThreads(): Promise<{ threads: ThreadSummary[] }> {
+  const res = await fetch(`${API_BASE}/threads`)
+  if (!res.ok) throw new Error(`list threads failed: ${res.status}`)
+  return res.json()
+}
+
+export type ThreadMessage = {
+  role: 'user' | 'assistant'
+  persona: string | null
+  content: string
+}
+
+export async function getThreadMessages(
+  threadId: string,
+): Promise<{ messages: ThreadMessage[] }> {
+  const res = await fetch(`${API_BASE}/threads/${threadId}/messages`)
+  if (!res.ok) throw new Error(`get thread messages failed: ${res.status}`)
+  return res.json()
+}

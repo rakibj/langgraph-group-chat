@@ -1,9 +1,23 @@
 :root {
+  color-scheme: light dark;
   --imessage-blue: #0b84ff;
   --imessage-gray: #e9e9eb;
   --imessage-gray-text: #1c1c1e;
   --page-bg: #ffffff;
   --header-border: #d1d1d6;
+  --input-bg: #ffffff;
+  --input-border: #d1d1d6;
+  --code-bg: rgba(0, 0, 0, 0.08);
+  --muted-text: #8e8e93;
+  --hover-bg: rgba(0, 0, 0, 0.04);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
 }
 
 html, body, #root {
@@ -47,6 +61,39 @@ html, body, #root {
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--imessage-gray-text);
+  flex: 1;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: auto;
+}
+
+.icon-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--imessage-gray-text);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.icon-button:hover {
+  background: var(--hover-bg);
+}
+
+.back-button {
+  font-size: 1.6rem;
+  color: var(--imessage-blue);
 }
 
 .chat-window {
@@ -60,9 +107,66 @@ html, body, #root {
 
 .chat-empty {
   margin: auto;
-  color: #8e8e93;
+  color: var(--muted-text);
   font-size: 0.9rem;
   text-align: center;
+}
+
+.thread-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.thread-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.7rem 1rem;
+  border: none;
+  border-bottom: 1px solid var(--header-border);
+  background: transparent;
+  color: var(--imessage-gray-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-row:hover {
+  background: var(--hover-bg);
+}
+
+.thread-row-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #a3a3a8;
+  color: white;
+  font-size: 1rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.thread-row-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.thread-row-title {
+  font-size: 0.92rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.thread-row-time {
+  font-size: 0.78rem;
+  color: var(--muted-text);
+  flex-shrink: 0;
 }
 
 .bubble-row {
@@ -99,10 +203,21 @@ html, body, #root {
   border-bottom-left-radius: 0.3rem;
 }
 
+.manager-note {
+  align-self: center;
+  max-width: 85%;
+  padding: 0.3rem 0.8rem;
+  margin: 0.2rem 0;
+  font-size: 0.72rem;
+  font-style: italic;
+  color: var(--muted-text);
+  text-align: center;
+}
+
 .bubble-persona {
   font-size: 0.75rem;
   font-weight: 600;
-  color: #8e8e93;
+  color: var(--muted-text);
   margin-bottom: 0.15rem;
 }
 
@@ -148,14 +263,14 @@ html, body, #root {
 }
 
 .bubble.assistant code {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--code-bg);
   border-radius: 0.3rem;
   padding: 0.1rem 0.3rem;
   font-size: 0.85em;
 }
 
 .bubble.assistant pre {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--code-bg);
   border-radius: 0.5rem;
   padding: 0.6rem;
   overflow-x: auto;
@@ -177,7 +292,7 @@ html, body, #root {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #8e8e93;
+  background: var(--muted-text);
   animation: bounce 1.2s infinite ease-in-out;
 }
 
@@ -213,7 +328,9 @@ html, body, #root {
   flex: 1;
   padding: 0.5rem 0.9rem;
   border-radius: 1.2rem;
-  border: 1px solid #d1d1d6;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--imessage-gray-text);
   font-size: 0.95rem;
   outline: none;
 }
@@ -244,25 +361,27 @@ html, body, #root {
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --imessage-gray: #262628;
     --imessage-gray-text: #f2f2f7;
     --page-bg: #000000;
     --header-border: #38383a;
+    --input-bg: #1c1c1e;
+    --input-border: #38383a;
+    --code-bg: rgba(255, 255, 255, 0.1);
+    --muted-text: #9b9ba1;
+    --hover-bg: rgba(255, 255, 255, 0.06);
   }
+}
 
-  .chat-header-title {
-    color: #f2f2f7;
-  }
-
-  .chat-input input {
-    background: #1c1c1e;
-    border-color: #38383a;
-    color: #f2f2f7;
-  }
-
-  .bubble.assistant code,
-  .bubble.assistant pre {
-    background: rgba(255, 255, 255, 0.1);
-  }
+:root[data-theme='dark'] {
+  --imessage-gray: #262628;
+  --imessage-gray-text: #f2f2f7;
+  --page-bg: #000000;
+  --header-border: #38383a;
+  --input-bg: #1c1c1e;
+  --input-border: #38383a;
+  --code-bg: rgba(255, 255, 255, 0.1);
+  --muted-text: #9b9ba1;
+  --hover-bg: rgba(255, 255, 255, 0.06);
 }
