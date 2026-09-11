@@ -14,7 +14,7 @@ from app.tools import echo
 async def build_graph(checkpointer):
     tools = [echo]
 
-    llm = ChatOpenAI(model="gpt-4.1", temperature=0)
+    llm = ChatOpenAI(model="gpt-5.6-luna", temperature=0, reasoning_effort="none")
     llm_with_tools = llm.bind_tools(tools)
 
     async def agent(state: MessagesState):
