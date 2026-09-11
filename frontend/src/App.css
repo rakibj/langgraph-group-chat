@@ -99,6 +99,56 @@ html, body, #root {
   border-bottom-left-radius: 0.3rem;
 }
 
+.bubble.assistant > :first-child {
+  margin-top: 0;
+}
+
+.bubble.assistant > :last-child {
+  margin-bottom: 0;
+}
+
+.bubble.assistant p,
+.bubble.assistant ul,
+.bubble.assistant ol {
+  margin: 0.5rem 0;
+}
+
+.bubble.assistant h1,
+.bubble.assistant h2,
+.bubble.assistant h3 {
+  font-size: 1em;
+  font-weight: 700;
+  margin: 0.7rem 0 0.3rem;
+}
+
+.bubble.assistant ul,
+.bubble.assistant ol {
+  padding-left: 1.2rem;
+}
+
+.bubble.assistant li {
+  margin: 0.15rem 0;
+}
+
+.bubble.assistant code {
+  background: rgba(0, 0, 0, 0.08);
+  border-radius: 0.3rem;
+  padding: 0.1rem 0.3rem;
+  font-size: 0.85em;
+}
+
+.bubble.assistant pre {
+  background: rgba(0, 0, 0, 0.08);
+  border-radius: 0.5rem;
+  padding: 0.6rem;
+  overflow-x: auto;
+}
+
+.bubble.assistant pre code {
+  background: none;
+  padding: 0;
+}
+
 .bubble.typing {
   display: flex;
   align-items: center;
@@ -192,5 +242,10 @@ html, body, #root {
     background: #1c1c1e;
     border-color: #38383a;
     color: #f2f2f7;
+  }
+
+  .bubble.assistant code,
+  .bubble.assistant pre {
+    background: rgba(255, 255, 255, 0.1);
   }
 }

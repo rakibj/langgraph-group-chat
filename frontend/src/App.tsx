@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
 import { sendMessage } from './api/client'
 import './App.css'
 
@@ -52,7 +53,13 @@ function App() {
         )}
         {messages.map((m, i) => (
           <div key={i} className={`bubble-row ${m.role}`}>
-            <div className={`bubble ${m.role}`}>{m.content}</div>
+            <div className={`bubble ${m.role}`}>
+              {m.role === 'assistant' ? (
+                <ReactMarkdown>{m.content}</ReactMarkdown>
+              ) : (
+                m.content
+              )}
+            </div>
           </div>
         ))}
         {sending && (
