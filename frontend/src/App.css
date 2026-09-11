@@ -99,6 +99,13 @@ html, body, #root {
   border-bottom-left-radius: 0.3rem;
 }
 
+.bubble-persona {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #8e8e93;
+  margin-bottom: 0.15rem;
+}
+
 .bubble.assistant > :first-child {
   margin-top: 0;
 }

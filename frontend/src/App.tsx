@@ -6,6 +6,16 @@ import './App.css'
 type Message = {
   role: 'user' | 'assistant'
   content: string
+  persona?: string
+}
+
+const PERSONA_LABELS: Record<string, string> = {
+  pragmatist: 'Pragmatist',
+  skeptic: 'Skeptic',
+  optimist: 'Optimist',
+  analyst: 'Analyst',
+  contrarian: 'Contrarian',
+  people_person: 'People Person',
 }
 
 function App() {
@@ -28,8 +38,15 @@ function App() {
     setSending(true)
 
     try {
-      const { reply } = await sendMessage(threadId.current, text)
-      setMessages((prev) => [...prev, { role: 'assistant', content: reply }])
+      const { replies } = await sendMessage(threadId.current, text)
+      setMessages((prev) => [
+        ...prev,
+        ...replies.map((r) => ({
+          role: 'assistant' as const,
+          content: r.content,
+          persona: r.persona,
+        })),
+      ])
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -54,6 +71,11 @@ function App() {
         {messages.map((m, i) => (
           <div key={i} className={`bubble-row ${m.role}`}>
             <div className={`bubble ${m.role}`}>
+              {m.role === 'assistant' && m.persona && (
+                <div className="bubble-persona">
+                  {PERSONA_LABELS[m.persona] ?? m.persona}
+                </div>
+              )}
               {m.role === 'assistant' ? (
                 <ReactMarkdown>{m.content}</ReactMarkdown>
               ) : (

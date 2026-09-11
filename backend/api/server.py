@@ -44,16 +44,25 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class PersonaReply(BaseModel):
+    persona: str
+    content: str
+
+
 class ChatResponse(BaseModel):
-    reply: str
+    replies: list[PersonaReply]
 
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     graph = app.state.graph
     config = {"configurable": {"thread_id": req.thread_id}}
+    prior_count = len((await graph.aget_state(config)).values.get("messages", []))
     result = await graph.ainvoke(
         {"messages": [{"role": "user", "content": req.message}]},
         config=config,
     )
-    return ChatResponse(reply=result["messages"][-1].content)
+    new_messages = result["messages"][prior_count + 1 :]
+    return ChatResponse(
+        replies=[PersonaReply(persona=m.name, content=m.content) for m in new_messages]
+    )

@@ -6,7 +6,15 @@ export async function checkHealth(): Promise<{ status: string }> {
   return res.json()
 }
 
-export async function sendMessage(threadId: string, message: string): Promise<{ reply: string }> {
+export type PersonaReply = {
+  persona: string
+  content: string
+}
+
+export async function sendMessage(
+  threadId: string,
+  message: string,
+): Promise<{ replies: PersonaReply[] }> {
   const res = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
