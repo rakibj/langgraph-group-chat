@@ -70,6 +70,17 @@ html, body, #root {
   font-weight: 600;
   color: var(--imessage-gray-text);
   flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.chat-header-strategy {
+  font-size: 0.85rem;
+}
+
+.thread-row-badge {
+  margin-right: 0.35rem;
 }
 
 .header-actions {
@@ -231,6 +242,55 @@ html, body, #root {
   font-style: italic;
   color: var(--muted-text);
   text-align: center;
+}
+
+.strategy-chooser {
+  margin: auto 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.5rem;
+}
+
+.strategy-chooser-title {
+  text-align: center;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted-text);
+  margin-bottom: 0.2rem;
+}
+
+.strategy-option {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 0.9rem;
+  border: 1px solid var(--input-border);
+  background: var(--imessage-gray);
+  color: var(--imessage-gray-text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.strategy-option:hover {
+  border-color: var(--imessage-blue);
+}
+
+.strategy-option-label {
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.strategy-option-hint {
+  font-size: 0.78rem;
+  color: var(--muted-text);
+  line-height: 1.3;
+}
+
+.verdict-bubble {
+  border-color: color-mix(in srgb, var(--persona-manager) 55%, transparent) !important;
 }
 
 .bubble.assistant.manager-highlight {

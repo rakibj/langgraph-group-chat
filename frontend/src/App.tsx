@@ -1,13 +1,19 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { getThreadMessages, listThreads, sendMessage, type ThreadSummary } from './api/client'
+import {
+  getThreadMessages,
+  listThreads,
+  sendMessage,
+  type Strategy,
+  type ThreadSummary,
+} from './api/client'
 import './App.css'
 
 type Message = {
   role: 'user' | 'assistant'
   content: string
   persona?: string
-  kind?: 'routing' | 'to_user' | null
+  kind?: 'routing' | 'to_user' | 'to_verdict' | 'verdict' | null
 }
 
 type View = 'list' | 'chat'
@@ -21,6 +27,7 @@ const PERSONA_LABELS: Record<string, string> = {
   contrarian: 'Contrarian',
   people_person: 'People Person',
   manager: 'Manager',
+  group: 'The Group',
 }
 
 const PERSONA_COLORS: Record<string, string> = {
@@ -31,6 +38,22 @@ const PERSONA_COLORS: Record<string, string> = {
   contrarian: 'var(--persona-contrarian)',
   people_person: 'var(--persona-people_person)',
   manager: 'var(--persona-manager)',
+  group: 'var(--persona-manager)',
+}
+
+const STRATEGY_LABELS: Record<Strategy, string> = {
+  confidence: 'Manager thinks out loud',
+  background: 'Friends only',
+}
+
+const STRATEGY_HINTS: Record<Strategy, string> = {
+  confidence: "You'll see who's being routed to and why, plus an explicit verdict when the group is confident.",
+  background: 'No routing chatter — just the friends talking, with a final group take once they land somewhere.',
+}
+
+const STRATEGY_BADGE: Record<Strategy, string> = {
+  confidence: '🧠',
+  background: '👥',
 }
 
 const THEME_ICON: Record<Theme, string> = {
@@ -60,6 +83,7 @@ function App() {
   const [threads, setThreads] = useState<ThreadSummary[]>([])
   const [threadsLoading, setThreadsLoading] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
+  const [strategy, setStrategy] = useState<Strategy | null>(null)
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [theme, setTheme] = useState<Theme>(() => {
@@ -108,15 +132,17 @@ function App() {
   function openNewChat() {
     threadId.current = crypto.randomUUID()
     setMessages([])
+    setStrategy(null)
     setView('chat')
   }
 
-  async function openThread(id: string) {
-    threadId.current = id
+  async function openThread(t: ThreadSummary) {
+    threadId.current = t.thread_id
     setMessages([])
+    setStrategy(t.strategy)
     setView('chat')
     try {
-      const { messages: history } = await getThreadMessages(id)
+      const { messages: history } = await getThreadMessages(t.thread_id)
       setMessages(
         history.map((m) => ({
           role: m.role,
@@ -132,14 +158,14 @@ function App() {
 
   async function handleSend() {
     const text = input.trim()
-    if (!text || sending || !threadId.current) return
+    if (!text || sending || !threadId.current || !strategy) return
 
     setMessages((prev) => [...prev, { role: 'user', content: text }])
     setInput('')
     setSending(true)
 
     try {
-      await sendMessage(threadId.current, text, (reply) => {
+      await sendMessage(threadId.current, text, strategy, (reply) => {
         setMessages((prev) => [
           ...prev,
           {
@@ -198,13 +224,18 @@ function App() {
               key={t.thread_id}
               type="button"
               className="thread-row"
-              onClick={() => openThread(t.thread_id)}
+              onClick={() => openThread(t)}
             >
               <div className="thread-row-avatar">
                 {t.title.slice(0, 1).toUpperCase()}
               </div>
               <div className="thread-row-body">
-                <div className="thread-row-title">{t.title || 'New chat'}</div>
+                <div className="thread-row-title">
+                  <span className="thread-row-badge" title={STRATEGY_LABELS[t.strategy]}>
+                    {STRATEGY_BADGE[t.strategy]}
+                  </span>
+                  {t.title || 'New chat'}
+                </div>
               </div>
               <div className="thread-row-time">{formatTimestamp(t.updated_at)}</div>
             </button>
@@ -226,7 +257,14 @@ function App() {
           ‹
         </button>
         <div className="chat-header-avatar">AI</div>
-        <div className="chat-header-title">Group Chat</div>
+        <div className="chat-header-title">
+          Group Chat
+          {strategy && (
+            <span className="chat-header-strategy" title={STRATEGY_LABELS[strategy]}>
+              {STRATEGY_BADGE[strategy]}
+            </span>
+          )}
+        </div>
         <div className="header-actions">
           <button
             type="button"
@@ -241,7 +279,25 @@ function App() {
       </header>
 
       <div className="chat-window" ref={scrollRef}>
-        {messages.length === 0 && (
+        {!strategy && (
+          <div className="strategy-chooser">
+            <div className="strategy-chooser-title">How should this group run?</div>
+            {(['confidence', 'background'] as Strategy[]).map((s) => (
+              <button
+                key={s}
+                type="button"
+                className="strategy-option"
+                onClick={() => setStrategy(s)}
+              >
+                <div className="strategy-option-label">
+                  {STRATEGY_BADGE[s]} {STRATEGY_LABELS[s]}
+                </div>
+                <div className="strategy-option-hint">{STRATEGY_HINTS[s]}</div>
+              </button>
+            ))}
+          </div>
+        )}
+        {strategy && messages.length === 0 && (
           <div className="chat-empty">Say something to start the conversation</div>
         )}
         {messages.map((m, i) => {
@@ -254,11 +310,14 @@ function App() {
           }
 
           const color = m.persona ? PERSONA_COLORS[m.persona] : undefined
-          const isManagerToUser = m.persona === 'manager' && m.kind === 'to_user'
+          const isHighlighted =
+            (m.persona === 'manager' && m.kind === 'to_user') || m.kind === 'verdict'
           return (
             <div key={i} className={`bubble-row ${m.role}`}>
               <div
-                className={`bubble ${m.role}${isManagerToUser ? ' manager-highlight' : ''}`}
+                className={`bubble ${m.role}${isHighlighted ? ' manager-highlight' : ''}${
+                  m.kind === 'verdict' ? ' verdict-bubble' : ''
+                }`}
                 style={color ? ({ '--accent': color } as CSSProperties) : undefined}
               >
                 {m.role === 'assistant' && m.persona && (
@@ -296,9 +355,10 @@ function App() {
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="iMessage"
+          placeholder={strategy ? 'iMessage' : 'Pick a strategy above to start'}
+          disabled={!strategy}
         />
-        <button type="submit" disabled={!input.trim() || sending} aria-label="Send">
+        <button type="submit" disabled={!strategy || !input.trim() || sending} aria-label="Send">
           ↑
         </button>
       </form>

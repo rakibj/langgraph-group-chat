@@ -7,15 +7,15 @@ Run with: uv run uvicorn api.server:app --reload --port 8000
 import json
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel
 
 from app.config import DATA_DIR
-from app.graph import build_graph
-from app.threads import init_threads_table, list_threads, touch_thread
+from app.graph import DEFAULT_STRATEGY, STRATEGIES, build_graph
+from app.threads import get_thread_strategy, init_threads_table, list_threads, touch_thread
 
 CHECKPOINT_DB_PATH = str(DATA_DIR / "checkpoints.db")
 
@@ -24,7 +24,9 @@ CHECKPOINT_DB_PATH = str(DATA_DIR / "checkpoints.db")
 async def lifespan(app: FastAPI):
     init_threads_table(CHECKPOINT_DB_PATH)
     async with AsyncSqliteSaver.from_conn_string(CHECKPOINT_DB_PATH) as checkpointer:
-        app.state.graph = await build_graph(checkpointer)
+        app.state.graphs = {
+            strategy: await build_graph(checkpointer, strategy) for strategy in STRATEGIES
+        }
         yield
 
 
@@ -46,13 +48,21 @@ async def health():
 class ChatRequest(BaseModel):
     thread_id: str
     message: str
+    strategy: str = DEFAULT_STRATEGY
 
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    graph = app.state.graph
+    # The strategy is fixed the first time a thread is touched; later
+    # messages on the same thread ignore req.strategy and keep using it,
+    # so a chat can't switch routing strategy mid-conversation.
+    strategy = get_thread_strategy(CHECKPOINT_DB_PATH, req.thread_id) or req.strategy
+    if strategy not in STRATEGIES:
+        raise HTTPException(400, f"unknown strategy {strategy!r}")
+
+    graph = app.state.graphs[strategy]
     config = {"configurable": {"thread_id": req.thread_id}}
-    touch_thread(CHECKPOINT_DB_PATH, req.thread_id, req.message)
+    touch_thread(CHECKPOINT_DB_PATH, req.thread_id, req.message, strategy)
 
     async def event_stream():
         async for update in graph.astream(
@@ -75,6 +85,7 @@ async def chat(req: ChatRequest):
 class ThreadSummary(BaseModel):
     thread_id: str
     title: str
+    strategy: str
     updated_at: str
 
 
@@ -102,7 +113,8 @@ class ThreadMessagesResponse(BaseModel):
 
 @app.get("/threads/{thread_id}/messages", response_model=ThreadMessagesResponse)
 async def thread_messages(thread_id: str):
-    graph = app.state.graph
+    strategy = get_thread_strategy(CHECKPOINT_DB_PATH, thread_id) or DEFAULT_STRATEGY
+    graph = app.state.graphs[strategy]
     config = {"configurable": {"thread_id": thread_id}}
     state = await graph.aget_state(config)
     messages = state.values.get("messages", [])

@@ -12,127 +12,166 @@ one at a time, in order, instead of in parallel, so each one sees every
 reply that came before it (including other personas') and can actually
 react to it. Personas loop back through the manager instead of ending the
 turn, so a turn can chain through several friends before control returns to
-the human. The manager ends the turn by routing to "human" (optionally with
-a short question), which simply ends this graph invocation — the next
-/chat call re-invokes from START with the new human message appended, and
-the router picks up the thread from full history. A hop cap guards against
-the router never handing back. Replies stream to the client one at a time
-over SSE as each node finishes, instead of arriving as one batch.
+the human.
+
+M3 exposed a real problem: the router alone never converges — it can ask
+the human for "just one more number" forever with no way to land a final
+call. Two candidate fixes for that, both implemented here as selectable
+strategies so they can be compared side by side in the UI before picking
+one:
+
+- "confidence": the manager stays visible (routing lines shown), and can
+  route to an explicit 'verdict' node once it judges the group has enough
+  real information, instead of only ever routing to a persona or 'human'.
+- "background": the manager's routing decisions are never shown — personas
+  just talk to each other directly, like a real group chat — and a 'group'
+  voice delivers the same kind of verdict once enough is known.
+
+Both strategies guard against re-litigating a verdict that's already been
+given (a `verdict_given` flag added to the manager's context once a verdict
+fires), and against a silent, empty turn (the background manager can't hand
+back to the human before at least one friend has spoken).
 """
 
 from langchain_core.messages import AIMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, MessagesState, StateGraph
 
-from app.schemas import RoutingDecision
+from app.personas import PERSONA_MAX_TOKENS, PERSONAS
+from app.schemas import RoutingDecision, SilentRoutingDecision
 
 MAX_HOPS_PER_TURN = 6
 
-GROUP_CHAT_STYLE = (
-    "You're one of six close friends this person texts when they need to think "
-    "something through — not a consultant, not an assistant. Talk like a friend "
-    "who actually knows them: warm, direct, a little informal. Exactly one "
-    "short sentence — the single most important thing you'd say, not a list of "
-    "them. No headers, no bullet lists, no markdown, no 'firstly/secondly'.\n\n"
-    "Your job isn't to hand them a verdict — it's to push their thinking from "
-    "your specific angle. Prefer a sharp question, a reframe, or a concrete "
-    "example/data point over a flat opinion. If you cite a number, keep it "
-    "quick and real-feeling (a rough stat, a benchmark, a 'most people in this "
-    "spot...') — not a citation, just the kind of thing a sharp friend would "
-    "actually know off the top of their head.\n\n"
-    "This is a real group chat, not six people answering in isolation: read "
-    "what's already been said, especially the most recent friend to reply, and "
-    "respond to THAT — agree with it, push back on it, or build on it by name "
-    "('yeah but pragmatist's point cuts both ways...'). Only give an unattached "
-    "take if nobody's said anything worth reacting to yet."
-)
-
-PERSONA_MAX_TOKENS = 60
-
-PERSONAS = {
-    "pragmatist": (
-        "You are the Pragmatist. You care about what's actually feasible given "
-        "time, money, and effort. When something sounds good but is hard to "
-        "execute, you're the friend who asks 'okay but who actually does that "
-        "work, and by when?'\n\n" + GROUP_CHAT_STYLE
-    ),
-    "skeptic": (
-        "You are the Skeptic. You clock the weak assumption nobody's said out "
-        "loud yet. You're not trying to shoot the idea down — you're the friend "
-        "who asks 'what would have to be true for this to work, and do we "
-        "actually know that?'\n\n" + GROUP_CHAT_STYLE
-    ),
-    "optimist": (
-        "You are the Optimist. You genuinely see the upside and say so — but "
-        "you back it with a real reason, not just cheerleading. You're the "
-        "friend who reframes 'this is scary' into 'here's what happens if it "
-        "works.'\n\n" + GROUP_CHAT_STYLE
-    ),
-    "analyst": (
-        "You are the Analyst. You think in numbers and tradeoffs, and you drop "
-        "a rough estimate or benchmark to make the decision concrete instead of "
-        "vibes-based. You're the friend who asks 'what's the actual number "
-        "that would change your mind here?'\n\n" + GROUP_CHAT_STYLE
-    ),
-    "contrarian": (
-        "You are the Contrarian. Whatever the obvious take in the room is, you "
-        "argue the other side on purpose — not to be difficult, but because "
-        "someone should stress-test the consensus before it hardens. You're "
-        "the friend who says 'devil's advocate, but...'\n\n" + GROUP_CHAT_STYLE
-    ),
-    "people_person": (
-        "You are the People Person. You bring it back to the humans in the "
-        "story — the customers, the team, the relationships — when everyone "
-        "else is stuck on strategy or numbers. You're the friend who asks 'but "
-        "how does this actually land for the people it affects?'\n\n"
-        + GROUP_CHAT_STYLE
-    ),
-}
-
-
-MANAGER_PROMPT = (
-    "You're the quiet one in this friend group chat — you don't weigh in with "
-    "your own opinion. After every single message, you decide exactly one "
-    "thing: who talks next. That's either one specific friend ("
-    + ", ".join(PERSONAS)
-    + "), or it's back to the human's turn.\n\n"
-    "Route to a friend only if they'd genuinely add a fresh angle right now — "
-    "a real group chat doesn't have all six pile on every message, and it "
-    "doesn't run forever before letting the human get a word in. Route to "
-    "'human' once a couple of friends have weighed in, or the moment the "
-    "group genuinely needs the human's input to go further (missing info, a "
-    "real fork in the decision) — and when you do, ask a short, specific "
-    "question if there's something worth asking, or just leave it light if "
-    "there isn't."
-)
+STRATEGIES = ("confidence", "background")
+DEFAULT_STRATEGY = "confidence"
 
 
 class State(MessagesState):
     next_speaker: str
     hop_count: int
+    verdict_given: bool
 
 
-async def build_graph(checkpointer):
+def _make_persona_node(persona_llm, name: str, system_prompt: str):
+    async def persona_node(state: State):
+        messages = [SystemMessage(content=system_prompt), *state["messages"]]
+        response = await persona_llm.ainvoke(messages)
+        response.name = name
+        return {"messages": [response]}
+
+    return persona_node
+
+
+def _last_persona_speaker(messages) -> str | None:
+    for m in reversed(messages):
+        name = getattr(m, "name", None)
+        if name in PERSONAS:
+            return name
+    return None
+
+
+async def _route_avoiding_repeat(router, prompt: str, messages, last_speaker: str | None):
+    """Ask the router for a decision; "never repeat the last speaker" is a
+    hard rule in the prompt already, but LLM instruction-following on a
+    "never" isn't reliable enough to trust alone — nudge once if it's
+    ignored, then fall back to a deterministic rotation rather than risk a
+    third repeat."""
+    decision = await router.ainvoke([SystemMessage(content=prompt), *messages])
+
+    if last_speaker and decision.next == last_speaker:
+        retry_prompt = (
+            prompt
+            + f"\n\nYou just picked {last_speaker} again, but they replied "
+            "last turn — the hard rule says pick someone else. Choose a "
+            "different friend this time."
+        )
+        decision = await router.ainvoke([SystemMessage(content=retry_prompt), *messages])
+
+    if last_speaker and decision.next == last_speaker:
+        order = list(PERSONAS)
+        decision.next = order[(order.index(last_speaker) + 1) % len(order)]
+
+    return decision
+
+
+# ---------------------------------------------------------------------------
+# Strategy 1: visible manager, self-assessed confidence, explicit verdict node
+# ---------------------------------------------------------------------------
+
+CONFIDENCE_MANAGER_PROMPT = (
+    "You're the quiet one in this friend group chat — you don't weigh in with "
+    "your own opinion, you just decide who talks next. After every message, "
+    "pick exactly one: a friend (" + ", ".join(PERSONAS) + "), 'human', or "
+    "'verdict'.\n\n"
+    "Route to a friend only if they'd add a genuinely fresh angle. Route to "
+    "'human' when the group is missing a real, specific fact it needs (a "
+    "number, a constraint, a confirmation) — ask for exactly that.\n\n"
+    "This is six distinct friends with six distinct angles, not one expert "
+    "the others defer to — hard rule: never route to the same friend two "
+    "human-turns in a row. Whoever replied last turn is off the table now, "
+    "no matter how relevant they seem, unless you've genuinely run out of "
+    "other angles worth hearing (rare — feasibility, weak assumptions, the "
+    "upside case, the numbers, the counter-case, and the human impact are "
+    "almost never all exhausted after two or three exchanges). Pick "
+    "whichever of the remaining five would react most naturally to what the "
+    "human just said.\n\n"
+    "Route to 'verdict' the moment you have enough concrete, verified "
+    "information (not vibes) to render a clear, confident recommendation — "
+    "don't keep fishing for more confirmation once the key facts are in. Be "
+    "decisive: two or three solid rounds of back-and-forth should be enough "
+    "for most decisions. Never ask the same question twice."
+)
+
+CONFIDENCE_VERDICT_REOPEN_NOTE = (
+    "\n\nA verdict has already been given earlier in this chat — that's "
+    "done, it's not a state the conversation needs to keep returning to. "
+    "The chat should keep flowing at full strength between friends, same "
+    "as before any verdict happened: default to routing to whichever "
+    "friend would react most naturally to what the human just said. Only "
+    "route to 'verdict' again if something genuinely significant has "
+    "shifted since the last one — real new information that would change "
+    "the call, or the group actually reaching a different conclusion after "
+    "real back-and-forth — not just because the human sounds unsure, asks "
+    "'are you sure?', or raises a follow-up question."
+)
+
+CONFIDENCE_VERDICT_PROMPT = (
+    "You're synthesizing this friend group chat into one final, clear "
+    "verdict for the human. Weigh what each friend actually said (cite them "
+    "by name where it matters), state the single biggest risk and the "
+    "single biggest reason for confidence, then give ONE explicit "
+    "recommendation: go, don't go, or go-but-only-if-X. 4-6 sentences, plain "
+    "and direct, no hedging into 'it depends on you.' Start with 'VERDICT:'."
+)
+
+
+async def _build_confidence_graph(checkpointer):
     llm = ChatOpenAI(model="gpt-5.6-luna", temperature=0, reasoning_effort="none")
     persona_llm = llm.bind(max_tokens=PERSONA_MAX_TOKENS)
     router = llm.with_structured_output(RoutingDecision)
 
     async def manager_node(state: State):
-        messages = [SystemMessage(content=MANAGER_PROMPT), *state["messages"]]
-        decision = await router.ainvoke(messages)
+        prompt = CONFIDENCE_MANAGER_PROMPT
+        if state.get("verdict_given"):
+            prompt += CONFIDENCE_VERDICT_REOPEN_NOTE
+        last_speaker = _last_persona_speaker(state["messages"])
+        decision = await _route_avoiding_repeat(router, prompt, state["messages"], last_speaker)
         hop_count = state.get("hop_count", 0)
 
-        next_speaker = decision.next if decision.next in PERSONAS else "human"
-        if next_speaker != "human" and hop_count >= MAX_HOPS_PER_TURN:
+        next_speaker = decision.next
+        if next_speaker not in PERSONAS and next_speaker not in ("human", "verdict"):
             next_speaker = "human"
+        if next_speaker in PERSONAS and hop_count >= MAX_HOPS_PER_TURN:
+            next_speaker = "verdict"
 
         if next_speaker == "human":
-            content = decision.note
-            kind = "to_user"
+            content, kind = decision.note, "to_user"
+        elif next_speaker == "verdict":
+            content = decision.note or "Alright, I think we've got enough — let me sum it up."
+            kind = "to_verdict"
         else:
             label = next_speaker.replace("_", " ").title()
-            content = f"Routing to: {label} — {decision.note}"
-            kind = "routing"
+            content, kind = f"Routing to: {label} — {decision.note}", "routing"
 
         manager_message = AIMessage(
             name="manager", content=content, additional_kwargs={"kind": kind}
@@ -140,34 +179,161 @@ async def build_graph(checkpointer):
         return {
             "messages": [manager_message],
             "next_speaker": next_speaker,
-            "hop_count": hop_count + 1 if next_speaker != "human" else 0,
+            "hop_count": hop_count + 1 if next_speaker in PERSONAS else 0,
         }
 
-    def make_persona_node(name: str, system_prompt: str):
-        async def persona_node(state: State):
-            messages = [SystemMessage(content=system_prompt), *state["messages"]]
-            response = await persona_llm.ainvoke(messages)
-            response.name = name
-            return {"messages": [response]}
-
-        return persona_node
+    async def verdict_node(state: State):
+        messages = [SystemMessage(content=CONFIDENCE_VERDICT_PROMPT), *state["messages"]]
+        response = await llm.ainvoke(messages)
+        response.name = "manager"
+        response.additional_kwargs = {"kind": "verdict"}
+        return {"messages": [response], "verdict_given": True}
 
     def route_from_manager(state: State):
         speaker = state["next_speaker"]
-        return speaker if speaker in PERSONAS else END
+        if speaker in PERSONAS:
+            return speaker
+        if speaker == "verdict":
+            return "verdict"
+        return END
 
     graph_builder = StateGraph(State)
-
     graph_builder.add_node("manager", manager_node)
+    graph_builder.add_node("verdict", verdict_node)
     graph_builder.add_edge(START, "manager")
+    graph_builder.add_edge("verdict", END)
 
     for name, system_prompt in PERSONAS.items():
-        graph_builder.add_node(name, make_persona_node(name, system_prompt))
+        graph_builder.add_node(name, _make_persona_node(persona_llm, name, system_prompt))
         graph_builder.add_edge(name, "manager")
 
     graph_builder.add_conditional_edges(
-        "manager", route_from_manager, list(PERSONAS) + [END]
+        "manager", route_from_manager, list(PERSONAS) + ["verdict", END]
     )
 
-    graph = graph_builder.compile(checkpointer=checkpointer)
-    return graph
+    return graph_builder.compile(checkpointer=checkpointer)
+
+
+# ---------------------------------------------------------------------------
+# Strategy 2: manager runs entirely in the background, friends talk directly
+# ---------------------------------------------------------------------------
+
+BACKGROUND_MANAGER_PROMPT = (
+    "You silently referee a friend group chat — nobody sees you, you just "
+    "pick who talks next. After every message, choose exactly one: a friend "
+    "(" + ", ".join(PERSONAS) + "), 'human', or 'verdict'.\n\n"
+    "Route to a friend only if they'd add a genuinely fresh angle. Route to "
+    "'human' when the group is missing a real, specific fact (a number, a "
+    "constraint, a confirmation).\n\n"
+    "This is six distinct friends, not one expert the others defer to — "
+    "hard rule: never route to the same friend two human-turns in a row. "
+    "Whoever replied last turn is off the table now, no matter how "
+    "relevant they seem, unless you've genuinely run out of other angles "
+    "worth hearing (rare — feasibility, weak assumptions, the upside case, "
+    "the numbers, the counter-case, and the human impact are almost never "
+    "all exhausted after two or three exchanges). Pick whichever of the "
+    "remaining five would react most naturally to what the human just "
+    "said.\n\n"
+    "Route to 'verdict' the moment there's enough concrete info for a "
+    "confident recommendation — don't stall for more confirmation once the "
+    "key facts are in. Be decisive."
+)
+
+BACKGROUND_VERDICT_REOPEN_NOTE = (
+    "\n\nThe group already gave a verdict earlier in this chat — that's "
+    "done, it's not a state the conversation needs to keep returning to. "
+    "The chat should keep flowing at full strength between friends, same "
+    "as before any verdict happened: default to routing to whichever "
+    "friend would react most naturally to what the human just said. Only "
+    "route to 'verdict' again if something genuinely significant has "
+    "shifted since the last one — real new information that would change "
+    "the call, or the group actually reaching a different conclusion after "
+    "real back-and-forth — not just because the human sounds unsure, asks "
+    "'are you sure?', or raises a follow-up question."
+)
+
+BACKGROUND_VERDICT_PROMPT = (
+    "You're one more voice in this group chat, speaking for the whole group "
+    "at once now that everyone's weighed in — casual, like 'okay, here's "
+    "where we landed'. Reference what a couple of friends said by name, then "
+    "give ONE clear, direct call: go, don't go, or go-but-only-if-X. 3-4 "
+    "sentences, warm but not wishy-washy, no headers or lists."
+)
+
+# A friend to fall back on if the manager tries to hand the turn back to the
+# human before anyone has actually said anything this turn — a silent
+# handoff would just look like the app ate the message.
+FALLBACK_PERSONA = next(iter(PERSONAS))
+
+
+async def _build_background_graph(checkpointer):
+    llm = ChatOpenAI(model="gpt-5.6-luna", temperature=0, reasoning_effort="none")
+    persona_llm = llm.bind(max_tokens=PERSONA_MAX_TOKENS)
+    router = llm.with_structured_output(SilentRoutingDecision)
+
+    async def manager_node(state: State):
+        prompt = BACKGROUND_MANAGER_PROMPT
+        if state.get("verdict_given"):
+            prompt += BACKGROUND_VERDICT_REOPEN_NOTE
+        last_speaker = _last_persona_speaker(state["messages"])
+        decision = await _route_avoiding_repeat(router, prompt, state["messages"], last_speaker)
+        hop_count = state.get("hop_count", 0)
+
+        next_speaker = decision.next
+        if next_speaker not in PERSONAS and next_speaker not in ("human", "verdict"):
+            next_speaker = "human"
+        if next_speaker in PERSONAS and hop_count >= MAX_HOPS_PER_TURN:
+            next_speaker = "verdict"
+        if next_speaker == "human" and hop_count == 0:
+            # Nobody has spoken yet this turn — never hand back in silence.
+            next_speaker = FALLBACK_PERSONA if last_speaker != FALLBACK_PERSONA else next(
+                p for p in PERSONAS if p != last_speaker
+            )
+
+        return {
+            "next_speaker": next_speaker,
+            "hop_count": hop_count + 1 if next_speaker in PERSONAS else 0,
+        }
+
+    async def verdict_node(state: State):
+        messages = [SystemMessage(content=BACKGROUND_VERDICT_PROMPT), *state["messages"]]
+        response = await llm.ainvoke(messages)
+        response.name = "group"
+        response.additional_kwargs = {"kind": "verdict"}
+        return {"messages": [response], "verdict_given": True}
+
+    def route_from_manager(state: State):
+        speaker = state["next_speaker"]
+        if speaker in PERSONAS:
+            return speaker
+        if speaker == "verdict":
+            return "verdict"
+        return END
+
+    graph_builder = StateGraph(State)
+    graph_builder.add_node("manager", manager_node)
+    graph_builder.add_node("verdict", verdict_node)
+    graph_builder.add_edge(START, "manager")
+    graph_builder.add_edge("verdict", END)
+
+    for name, system_prompt in PERSONAS.items():
+        graph_builder.add_node(name, _make_persona_node(persona_llm, name, system_prompt))
+        graph_builder.add_edge(name, "manager")
+
+    graph_builder.add_conditional_edges(
+        "manager", route_from_manager, list(PERSONAS) + ["verdict", END]
+    )
+
+    return graph_builder.compile(checkpointer=checkpointer)
+
+
+_BUILDERS = {
+    "confidence": _build_confidence_graph,
+    "background": _build_background_graph,
+}
+
+
+async def build_graph(checkpointer, strategy: str = DEFAULT_STRATEGY):
+    if strategy not in _BUILDERS:
+        raise ValueError(f"unknown strategy {strategy!r}, expected one of {STRATEGIES}")
+    return await _BUILDERS[strategy](checkpointer)

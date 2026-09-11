@@ -6,21 +6,24 @@ export async function checkHealth(): Promise<{ status: string }> {
   return res.json()
 }
 
+export type Strategy = 'confidence' | 'background'
+
 export type PersonaReply = {
   persona: string
   content: string
-  kind: 'routing' | 'to_user' | null
+  kind: 'routing' | 'to_user' | 'to_verdict' | 'verdict' | null
 }
 
 export async function sendMessage(
   threadId: string,
   message: string,
+  strategy: Strategy,
   onReply: (reply: PersonaReply) => void,
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ thread_id: threadId, message }),
+    body: JSON.stringify({ thread_id: threadId, message, strategy }),
   })
   if (!res.ok || !res.body) throw new Error(`chat request failed: ${res.status}`)
 
@@ -46,6 +49,7 @@ export async function sendMessage(
 export type ThreadSummary = {
   thread_id: string
   title: string
+  strategy: Strategy
   updated_at: string
 }
 
@@ -59,7 +63,7 @@ export type ThreadMessage = {
   role: 'user' | 'assistant'
   persona: string | null
   content: string
-  kind: 'routing' | 'to_user' | null
+  kind: 'routing' | 'to_user' | 'to_verdict' | 'verdict' | null
 }
 
 export async function getThreadMessages(
