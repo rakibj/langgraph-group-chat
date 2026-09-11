@@ -83,7 +83,6 @@ html, body, #root {
   padding: 0.5rem 0.9rem;
   border-radius: 1.15rem;
   line-height: 1.35;
-  white-space: pre-wrap;
   font-size: 0.95rem;
 }
 
@@ -91,6 +90,7 @@ html, body, #root {
   background: var(--imessage-blue);
   color: white;
   border-bottom-right-radius: 0.3rem;
+  white-space: pre-wrap;
 }
 
 .bubble.assistant {
@@ -127,6 +127,16 @@ html, body, #root {
 }
 
 .bubble.assistant li {
+  margin: 0.15rem 0;
+}
+
+.bubble.assistant li > p {
+  margin: 0;
+  display: inline;
+}
+
+.bubble.assistant li > ul,
+.bubble.assistant li > ol {
   margin: 0.15rem 0;
 }
 
