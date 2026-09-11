@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { sendMessage } from './api/client'
 import './App.css'
 
@@ -12,6 +12,11 @@ function App() {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const threadId = useRef(crypto.randomUUID())
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+  }, [messages, sending])
 
   async function handleSend() {
     const text = input.trim()
@@ -36,33 +41,47 @@ function App() {
 
   return (
     <div className="app">
-      <main className="app-main">
-        <h1>LangGraph Starter</h1>
-        <div className="chat-window">
-          {messages.map((m, i) => (
-            <div key={i} className={`bubble ${m.role}`}>
-              {m.content}
+      <header className="chat-header">
+        <div className="chat-header-avatar">AI</div>
+        <div className="chat-header-title">Agent</div>
+      </header>
+
+      <div className="chat-window" ref={scrollRef}>
+        {messages.length === 0 && (
+          <div className="chat-empty">Say something to start the conversation</div>
+        )}
+        {messages.map((m, i) => (
+          <div key={i} className={`bubble-row ${m.role}`}>
+            <div className={`bubble ${m.role}`}>{m.content}</div>
+          </div>
+        ))}
+        {sending && (
+          <div className="bubble-row assistant">
+            <div className="bubble assistant typing">
+              <span className="dot" />
+              <span className="dot" />
+              <span className="dot" />
             </div>
-          ))}
-          {sending && <div className="bubble assistant pending">thinking...</div>}
-        </div>
-        <form
-          className="chat-input"
-          onSubmit={(e) => {
-            e.preventDefault()
-            handleSend()
-          }}
-        >
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask something..."
-          />
-          <button type="submit" disabled={sending}>
-            Send
-          </button>
-        </form>
-      </main>
+          </div>
+        )}
+      </div>
+
+      <form
+        className="chat-input"
+        onSubmit={(e) => {
+          e.preventDefault()
+          handleSend()
+        }}
+      >
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="iMessage"
+        />
+        <button type="submit" disabled={!input.trim() || sending} aria-label="Send">
+          ↑
+        </button>
+      </form>
     </div>
   )
 }
