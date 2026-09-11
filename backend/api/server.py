@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from pydantic import BaseModel
 
 from app.config import DATA_DIR
 from app.graph import build_graph
@@ -36,3 +37,23 @@ app.add_middleware(
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+class ChatRequest(BaseModel):
+    thread_id: str
+    message: str
+
+
+class ChatResponse(BaseModel):
+    reply: str
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(req: ChatRequest):
+    graph = app.state.graph
+    config = {"configurable": {"thread_id": req.thread_id}}
+    result = await graph.ainvoke(
+        {"messages": [{"role": "user", "content": req.message}]},
+        config=config,
+    )
+    return ChatResponse(reply=result["messages"][-1].content)

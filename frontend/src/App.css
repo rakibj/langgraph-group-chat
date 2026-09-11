@@ -7,3 +7,66 @@
 .app-main h1 {
   font-size: 1.5rem;
 }
+
+.chat-window {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 300px;
+  margin: 1.5rem 0;
+}
+
+.bubble {
+  max-width: 75%;
+  padding: 0.6rem 0.9rem;
+  border-radius: 0.9rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.bubble.user {
+  align-self: flex-end;
+  background: #2563eb;
+  color: white;
+  border-bottom-right-radius: 0.2rem;
+}
+
+.bubble.assistant {
+  align-self: flex-start;
+  background: #e5e7eb;
+  color: #111827;
+  border-bottom-left-radius: 0.2rem;
+}
+
+.bubble.pending {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.chat-input {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.chat-input input {
+  flex: 1;
+  padding: 0.6rem 0.8rem;
+  border-radius: 0.5rem;
+  border: 1px solid #d1d5db;
+  font-size: 1rem;
+}
+
+.chat-input button {
+  padding: 0.6rem 1.2rem;
+  border-radius: 0.5rem;
+  border: none;
+  background: #2563eb;
+  color: white;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.chat-input button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
