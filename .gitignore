@@ -1,0 +1,37 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local checkpoint/data store
+backend/data/
+
+# Secrets — never commit real credentials
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+*.pem
+*.key
+secrets.*
+.claude/settings.local.json
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Local scratch / generated artifacts
+*.db
+*.db-shm
+*.db-wal
