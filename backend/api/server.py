@@ -4,10 +4,12 @@ Run with: uv run uvicorn api.server:app --reload --port 8000
 (from the backend/ directory, same cwd assumption as main.py.)
 """
 
+import json
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel
 
@@ -46,29 +48,28 @@ class ChatRequest(BaseModel):
     message: str
 
 
-class PersonaReply(BaseModel):
-    persona: str
-    content: str
-
-
-class ChatResponse(BaseModel):
-    replies: list[PersonaReply]
-
-
-@app.post("/chat", response_model=ChatResponse)
+@app.post("/chat")
 async def chat(req: ChatRequest):
     graph = app.state.graph
     config = {"configurable": {"thread_id": req.thread_id}}
-    prior_count = len((await graph.aget_state(config)).values.get("messages", []))
     touch_thread(CHECKPOINT_DB_PATH, req.thread_id, req.message)
-    result = await graph.ainvoke(
-        {"messages": [{"role": "user", "content": req.message}]},
-        config=config,
-    )
-    new_messages = result["messages"][prior_count + 1 :]
-    return ChatResponse(
-        replies=[PersonaReply(persona=m.name, content=m.content) for m in new_messages]
-    )
+
+    async def event_stream():
+        async for update in graph.astream(
+            {"messages": [{"role": "user", "content": req.message}]},
+            config=config,
+            stream_mode="updates",
+        ):
+            for node_output in update.values():
+                for message in node_output.get("messages", []):
+                    payload = {
+                        "persona": message.name,
+                        "content": message.content,
+                        "kind": message.additional_kwargs.get("kind"),
+                    }
+                    yield f"data: {json.dumps(payload)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 class ThreadSummary(BaseModel):
@@ -92,6 +93,7 @@ class ThreadMessage(BaseModel):
     role: str
     persona: str | None = None
     content: str
+    kind: str | None = None
 
 
 class ThreadMessagesResponse(BaseModel):
@@ -110,6 +112,7 @@ async def thread_messages(thread_id: str):
                 role="user" if m.type == "human" else "assistant",
                 persona=getattr(m, "name", None),
                 content=m.content,
+                kind=getattr(m, "additional_kwargs", {}).get("kind"),
             )
             for m in messages
         ]

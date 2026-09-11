@@ -9,19 +9,38 @@ export async function checkHealth(): Promise<{ status: string }> {
 export type PersonaReply = {
   persona: string
   content: string
+  kind: 'routing' | 'to_user' | null
 }
 
 export async function sendMessage(
   threadId: string,
   message: string,
-): Promise<{ replies: PersonaReply[] }> {
+  onReply: (reply: PersonaReply) => void,
+): Promise<void> {
   const res = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ thread_id: threadId, message }),
   })
-  if (!res.ok) throw new Error(`chat request failed: ${res.status}`)
-  return res.json()
+  if (!res.ok || !res.body) throw new Error(`chat request failed: ${res.status}`)
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    const events = buffer.split('\n\n')
+    buffer = events.pop() ?? ''
+    for (const event of events) {
+      const line = event.split('\n').find((l) => l.startsWith('data: '))
+      if (!line) continue
+      onReply(JSON.parse(line.slice('data: '.length)))
+    }
+  }
 }
 
 export type ThreadSummary = {
@@ -40,6 +59,7 @@ export type ThreadMessage = {
   role: 'user' | 'assistant'
   persona: string | null
   content: string
+  kind: 'routing' | 'to_user' | null
 }
 
 export async function getThreadMessages(

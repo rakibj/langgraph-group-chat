@@ -10,6 +10,14 @@
   --code-bg: rgba(0, 0, 0, 0.08);
   --muted-text: #8e8e93;
   --hover-bg: rgba(0, 0, 0, 0.04);
+
+  --persona-pragmatist: #64748b;
+  --persona-skeptic: #7c3aed;
+  --persona-optimist: #f59e0b;
+  --persona-analyst: #0891b2;
+  --persona-contrarian: #dc2626;
+  --persona-people_person: #16a34a;
+  --persona-manager: #6366f1;
 }
 
 :root[data-theme='light'] {
@@ -203,6 +211,17 @@ html, body, #root {
   border-bottom-left-radius: 0.3rem;
 }
 
+.bubble.assistant[style] {
+  background: color-mix(in srgb, var(--accent) 14%, var(--imessage-gray));
+}
+
+.bubble-persona {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted-text);
+  margin-bottom: 0.15rem;
+}
+
 .manager-note {
   align-self: center;
   max-width: 85%;
@@ -214,11 +233,21 @@ html, body, #root {
   text-align: center;
 }
 
-.bubble-persona {
-  font-size: 0.75rem;
+.bubble.assistant.manager-highlight {
+  background: color-mix(in srgb, var(--accent) 20%, var(--imessage-gray));
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 1.4rem;
+  max-width: 78%;
+  padding: 0.5rem 0.95rem;
+  font-size: 0.95rem;
   font-weight: 600;
-  color: var(--muted-text);
-  margin-bottom: 0.15rem;
+}
+
+.bubble.manager-highlight .bubble-persona {
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .bubble.assistant > :first-child {

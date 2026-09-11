@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { getThreadMessages, listThreads, sendMessage, type ThreadSummary } from './api/client'
 import './App.css'
@@ -7,6 +7,7 @@ type Message = {
   role: 'user' | 'assistant'
   content: string
   persona?: string
+  kind?: 'routing' | 'to_user' | null
 }
 
 type View = 'list' | 'chat'
@@ -19,6 +20,17 @@ const PERSONA_LABELS: Record<string, string> = {
   analyst: 'Analyst',
   contrarian: 'Contrarian',
   people_person: 'People Person',
+  manager: 'Manager',
+}
+
+const PERSONA_COLORS: Record<string, string> = {
+  pragmatist: 'var(--persona-pragmatist)',
+  skeptic: 'var(--persona-skeptic)',
+  optimist: 'var(--persona-optimist)',
+  analyst: 'var(--persona-analyst)',
+  contrarian: 'var(--persona-contrarian)',
+  people_person: 'var(--persona-people_person)',
+  manager: 'var(--persona-manager)',
 }
 
 const THEME_ICON: Record<Theme, string> = {
@@ -110,6 +122,7 @@ function App() {
           role: m.role,
           content: m.content,
           persona: m.persona ?? undefined,
+          kind: m.kind,
         })),
       )
     } catch {
@@ -126,15 +139,17 @@ function App() {
     setSending(true)
 
     try {
-      const { replies } = await sendMessage(threadId.current, text)
-      setMessages((prev) => [
-        ...prev,
-        ...replies.map((r) => ({
-          role: 'assistant' as const,
-          content: r.content,
-          persona: r.persona,
-        })),
-      ])
+      await sendMessage(threadId.current, text, (reply) => {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: reply.content,
+            persona: reply.persona,
+            kind: reply.kind,
+          },
+        ])
+      })
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -229,16 +244,25 @@ function App() {
         {messages.length === 0 && (
           <div className="chat-empty">Say something to start the conversation</div>
         )}
-        {messages.map((m, i) =>
-          m.persona === 'manager' ? (
-            <div key={i} className="manager-note">
-              {m.content}
-            </div>
-          ) : (
+        {messages.map((m, i) => {
+          if (m.persona === 'manager' && m.kind === 'routing') {
+            return (
+              <div key={i} className="manager-note">
+                {m.content}
+              </div>
+            )
+          }
+
+          const color = m.persona ? PERSONA_COLORS[m.persona] : undefined
+          const isManagerToUser = m.persona === 'manager' && m.kind === 'to_user'
+          return (
             <div key={i} className={`bubble-row ${m.role}`}>
-              <div className={`bubble ${m.role}`}>
+              <div
+                className={`bubble ${m.role}${isManagerToUser ? ' manager-highlight' : ''}`}
+                style={color ? ({ '--accent': color } as CSSProperties) : undefined}
+              >
                 {m.role === 'assistant' && m.persona && (
-                  <div className="bubble-persona">
+                  <div className="bubble-persona" style={{ color }}>
                     {PERSONA_LABELS[m.persona] ?? m.persona}
                   </div>
                 )}
@@ -249,8 +273,8 @@ function App() {
                 )}
               </div>
             </div>
-          ),
-        )}
+          )
+        })}
         {sending && (
           <div className="bubble-row assistant">
             <div className="bubble assistant typing">

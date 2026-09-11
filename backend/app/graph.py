@@ -3,8 +3,21 @@
 M2 (routing/turn-taking): a manager node reads the conversation and picks
 which persona(s) should respond this turn — not all six every time. The
 manager's decision is appended to the message list as a visible "manager"
-message so the UI can show who was routed to and why. Replace/extend with
-real nodes, edges, and interrupt() review steps as the project grows.
+message so the UI can show who was routed to and why.
+
+M3 (inter-agent response + continuous router loop): the manager isn't a
+one-shot batch-picker anymore — it's a router called after every single
+message (human or persona) to decide exactly one next speaker. Personas run
+one at a time, in order, instead of in parallel, so each one sees every
+reply that came before it (including other personas') and can actually
+react to it. Personas loop back through the manager instead of ending the
+turn, so a turn can chain through several friends before control returns to
+the human. The manager ends the turn by routing to "human" (optionally with
+a short question), which simply ends this graph invocation — the next
+/chat call re-invokes from START with the new human message appended, and
+the router picks up the thread from full history. A hop cap guards against
+the router never handing back. Replies stream to the client one at a time
+over SSE as each node finishes, instead of arriving as one batch.
 """
 
 from langchain_core.messages import AIMessage, SystemMessage
@@ -13,19 +26,28 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 
 from app.schemas import RoutingDecision
 
+MAX_HOPS_PER_TURN = 6
+
 GROUP_CHAT_STYLE = (
     "You're one of six close friends this person texts when they need to think "
     "something through — not a consultant, not an assistant. Talk like a friend "
-    "who actually knows them: warm, direct, a little informal. 1-2 short "
-    "sentences, max. No headers, no bullet lists, no markdown, no "
-    "'firstly/secondly'.\n\n"
+    "who actually knows them: warm, direct, a little informal. Exactly one "
+    "short sentence — the single most important thing you'd say, not a list of "
+    "them. No headers, no bullet lists, no markdown, no 'firstly/secondly'.\n\n"
     "Your job isn't to hand them a verdict — it's to push their thinking from "
     "your specific angle. Prefer a sharp question, a reframe, or a concrete "
     "example/data point over a flat opinion. If you cite a number, keep it "
     "quick and real-feeling (a rough stat, a benchmark, a 'most people in this "
     "spot...') — not a citation, just the kind of thing a sharp friend would "
-    "actually know off the top of their head."
+    "actually know off the top of their head.\n\n"
+    "This is a real group chat, not six people answering in isolation: read "
+    "what's already been said, especially the most recent friend to reply, and "
+    "respond to THAT — agree with it, push back on it, or build on it by name "
+    "('yeah but pragmatist's point cuts both ways...'). Only give an unattached "
+    "take if nobody's said anything worth reacting to yet."
 )
+
+PERSONA_MAX_TOKENS = 60
 
 PERSONAS = {
     "pragmatist": (
@@ -70,47 +92,69 @@ PERSONAS = {
 
 MANAGER_PROMPT = (
     "You're the quiet one in this friend group chat — you don't weigh in with "
-    "your own opinion, you just have a feel for who should say something next: "
+    "your own opinion. After every single message, you decide exactly one "
+    "thing: who talks next. That's either one specific friend ("
     + ", ".join(PERSONAS)
-    + ". Given the conversation so far, pick only the friends who'd genuinely "
-    "add a fresh angle right now, the way a real group chat naturally has one "
-    "or two people jump in rather than all six dogpiling every message. Always "
-    "let at least one through."
+    + "), or it's back to the human's turn.\n\n"
+    "Route to a friend only if they'd genuinely add a fresh angle right now — "
+    "a real group chat doesn't have all six pile on every message, and it "
+    "doesn't run forever before letting the human get a word in. Route to "
+    "'human' once a couple of friends have weighed in, or the moment the "
+    "group genuinely needs the human's input to go further (missing info, a "
+    "real fork in the decision) — and when you do, ask a short, specific "
+    "question if there's something worth asking, or just leave it light if "
+    "there isn't."
 )
 
 
 class State(MessagesState):
-    next_speakers: list[str]
+    next_speaker: str
+    hop_count: int
 
 
 async def build_graph(checkpointer):
     llm = ChatOpenAI(model="gpt-5.6-luna", temperature=0, reasoning_effort="none")
+    persona_llm = llm.bind(max_tokens=PERSONA_MAX_TOKENS)
     router = llm.with_structured_output(RoutingDecision)
 
     async def manager_node(state: State):
         messages = [SystemMessage(content=MANAGER_PROMPT), *state["messages"]]
         decision = await router.ainvoke(messages)
-        speakers = [name for name in decision.speakers if name in PERSONAS] or [
-            next(iter(PERSONAS))
-        ]
-        labels = ", ".join(name.replace("_", " ").title() for name in speakers)
+        hop_count = state.get("hop_count", 0)
+
+        next_speaker = decision.next if decision.next in PERSONAS else "human"
+        if next_speaker != "human" and hop_count >= MAX_HOPS_PER_TURN:
+            next_speaker = "human"
+
+        if next_speaker == "human":
+            content = decision.note
+            kind = "to_user"
+        else:
+            label = next_speaker.replace("_", " ").title()
+            content = f"Routing to: {label} — {decision.note}"
+            kind = "routing"
+
         manager_message = AIMessage(
-            name="manager",
-            content=f"Routing to: {labels} — {decision.reasoning}",
+            name="manager", content=content, additional_kwargs={"kind": kind}
         )
-        return {"messages": [manager_message], "next_speakers": speakers}
+        return {
+            "messages": [manager_message],
+            "next_speaker": next_speaker,
+            "hop_count": hop_count + 1 if next_speaker != "human" else 0,
+        }
 
     def make_persona_node(name: str, system_prompt: str):
         async def persona_node(state: State):
             messages = [SystemMessage(content=system_prompt), *state["messages"]]
-            response = await llm.ainvoke(messages)
+            response = await persona_llm.ainvoke(messages)
             response.name = name
             return {"messages": [response]}
 
         return persona_node
 
-    def route_to_speakers(state: State):
-        return state["next_speakers"]
+    def route_from_manager(state: State):
+        speaker = state["next_speaker"]
+        return speaker if speaker in PERSONAS else END
 
     graph_builder = StateGraph(State)
 
@@ -119,10 +163,10 @@ async def build_graph(checkpointer):
 
     for name, system_prompt in PERSONAS.items():
         graph_builder.add_node(name, make_persona_node(name, system_prompt))
-        graph_builder.add_edge(name, END)
+        graph_builder.add_edge(name, "manager")
 
     graph_builder.add_conditional_edges(
-        "manager", route_to_speakers, list(PERSONAS)
+        "manager", route_from_manager, list(PERSONAS) + [END]
     )
 
     graph = graph_builder.compile(checkpointer=checkpointer)
