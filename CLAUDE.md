@@ -59,3 +59,55 @@ There is one graph, built by `app.graph.build_graph(checkpointer)`, and one
 checkpoint store (`backend/data/checkpoints.db`, opened once per process).
 Extend the graph by adding nodes/edges in `app/graph.py`, tools in
 `app/tools.py`, and structured-output models in `app/schemas.py`.
+
+## Video plan
+
+This build is being filmed milestone by milestone for a YouTube video.
+
+**Core open loop:** Can six conflicting AI perspectives actually produce a
+better decision than one powerful model?
+
+**Title options:**
+- Primary: "I Made 6 AI Agents Debate My Next Business Decision"
+- Backup: "I Made 6 AI Agents Disagree Before I Made a Decision"
+- Wildcard: "I Built an AI Group Chat That Argues With Itself"
+
+**Thumbnail:** group chat UI, visible disagreement (green YES vs red "Too
+risky"), real reaction face. Text: "THEY DISAGREED". To fix: remove chat
+bubble timestamps (illegible at phone size).
+
+**Target length:** 6-8 min.
+
+**Structure:**
+- 0:00-0:15 — Proof/payoff tease: real question, agents disagree, manager
+  flags need for more info, flash final verdict without explaining it
+- 0:15-0:45 — Premise: one AI answer vs six agents with different thinking
+  styles; reveal the six personas
+- 0:45-1:10 — Failure/tension: naive version (all 6 reply every time) is
+  noisy, repetitive, expensive, fake-feeling
+- Middle — escalating build problems, each with a before → after demo:
+  who speaks? how do agents respond to each other? when does the manager
+  ask the user? when is the conversation "finished"? Engineer visible
+  disagreements deliberately (agent challenges another, manager interrupts,
+  user gets questioned, majority is wrong, verdict changes with new
+  information) — these are the entertainment beats, and map to upcoming
+  milestones (routing/turn-taking, inter-agent response, manager-asks-user,
+  termination condition).
+- Final ~90s — Payoff: run one real decision end-to-end, reveal verdict,
+  compare vs a single-AI answer. Open question to resolve before shooting:
+  the real decision run needs to visibly beat/differ from a single ChatGPT
+  answer, or the payoff undersells the open loop.
+
+**CTA:** ~1:00 mark — DIY path (code/resources) + "book a call, I'll build
+it for you"; restate both at close.
+
+**Editing rules:** keep implementation visual (architecture diagrams, state
+changes, routing decisions); cut API setup/code walkthroughs unless they
+explain a break; don't reveal the "Six Thinking Hats" inspiration until
+after the system is understood; if a segment doesn't move the story or
+explain an important engineering decision, it goes to description/GitHub
+instead of the video.
+
+**Milestone progress:**
+- M0 — done (iMessage-style chat UI restyle, markdown rendering for
+  assistant bubbles, model switched to gpt-5.6-luna).
