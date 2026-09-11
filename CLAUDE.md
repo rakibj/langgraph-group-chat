@@ -15,6 +15,14 @@ append the question and answer to `CLARIFICATIONS.md` at the repo root —
 don't just answer inline and drop it. Keep entries dated, newest at the
 bottom. (Create the file if it doesn't exist yet.)
 
+This project is being built milestone by milestone (see the video plan
+context) so each stage is independently demoable. At the end of each
+milestone, export the current graph structure with
+`python scripts/export_graph.py <milestone-name>` (run from `backend/`)
+and commit the resulting `backend/docs/<milestone-name>.md` alongside the
+milestone's code, so `backend/docs/` accumulates a Mermaid diagram per
+milestone showing how the graph grew.
+
 ## Architecture
 
 ```
@@ -28,7 +36,11 @@ backend/
                                 AsyncSqliteSaver-checkpointed
   api/
     server.py                FastAPI wrapper exposing the same graph
-                               (currently just a /health check)
+                               (/health, /chat)
+  scripts/
+    export_graph.py           writes backend/docs/<milestone>.md, a
+                                Mermaid diagram of the current graph
+  docs/                   one Mermaid graph export per milestone
   data/                   SQLite checkpoints, gitignored
 frontend/                React + Vite shell — calls backend GET /health
 code_sample.ipynb        reference notebook from the previous project,
