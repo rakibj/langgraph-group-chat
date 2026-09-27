@@ -31,18 +31,35 @@ Both strategies guard against re-litigating a verdict that's already been
 given (a `verdict_given` flag added to the manager's context once a verdict
 fires), and against a silent, empty turn (the background manager can't hand
 back to the human before at least one friend has spoken).
+
+M5 ("debate" strategy): the first two strategies still make every friend
+answer the human. This one splits the chat into two phases: an intake where
+only the manager talks, asking the human questions until it has a real
+brief, then a debate where the friends argue with *each other* (tagging,
+roasting, changing their minds) behind a hidden router. The router can
+pause the debate to ask the human for one missing fact, and ends it by
+calling a vote; the manager then weighs the arguments (not just the
+headcount) into a verdict.
 """
 
-from langchain_core.messages import AIMessage, SystemMessage
+import asyncio
+
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, MessagesState, StateGraph
 
-from app.personas import PERSONA_MAX_TOKENS, PERSONAS
-from app.schemas import RoutingDecision, SilentRoutingDecision
+from app.personas import (
+    DEBATE_PERSONA_MAX_TOKENS,
+    DEBATE_PERSONAS,
+    DEBATE_VOTE_INSTRUCTION,
+    PERSONA_MAX_TOKENS,
+    PERSONAS,
+)
+from app.schemas import DebateDecision, IntakeDecision, RoutingDecision, SilentRoutingDecision
 
-MAX_HOPS_PER_TURN = 6
+MAX_HOPS_PER_TURN = 12
 
-STRATEGIES = ("confidence", "background")
+STRATEGIES = ("confidence", "background", "debate")
 DEFAULT_STRATEGY = "confidence"
 
 
@@ -50,6 +67,10 @@ class State(MessagesState):
     next_speaker: str
     hop_count: int
     verdict_given: bool
+    # "debate" strategy only
+    phase: str  # "intake" until the manager hands the brief over, then "debate"
+    debate_hops: int  # friend messages since the brief / the last verdict
+    pending_question: str
 
 
 def _make_persona_node(persona_llm, name: str, system_prompt: str):
@@ -106,6 +127,14 @@ CONFIDENCE_MANAGER_PROMPT = (
     "Route to a friend only if they'd add a genuinely fresh angle. Route to "
     "'human' when the group is missing a real, specific fact it needs (a "
     "number, a constraint, a confirmation) — ask for exactly that.\n\n"
+    "Once the human has given the group what it needs to actually reason "
+    "about this, stop routing back to them just to check in, paraphrase, or "
+    "ask if they're sure — keep the turn inside the group instead. If two "
+    "friends are actively disagreeing, route to whichever of them (or a "
+    "third friend) would push the argument forward, and let that play out "
+    "for several exchanges before you even consider a verdict or the human "
+    "again. Only interrupt the group to go back to the human for a real, "
+    "specific missing fact — never to manage the pace of the conversation.\n\n"
     "This is six distinct friends with six distinct angles, not one expert "
     "the others defer to — hard rule: never route to the same friend two "
     "human-turns in a row. Whoever replied last turn is off the table now, "
@@ -225,6 +254,13 @@ BACKGROUND_MANAGER_PROMPT = (
     "Route to a friend only if they'd add a genuinely fresh angle. Route to "
     "'human' when the group is missing a real, specific fact (a number, a "
     "constraint, a confirmation).\n\n"
+    "Once the human has given the group what it needs to actually reason "
+    "about this, stop routing back to them just to check in or paraphrase — "
+    "keep the turn inside the group instead. If two friends are actively "
+    "disagreeing, route to whichever of them (or a third friend) would push "
+    "the argument forward, and let that play out for several exchanges "
+    "before considering a verdict or the human again. Only interrupt the "
+    "group to go back to the human for a real, specific missing fact.\n\n"
     "This is six distinct friends, not one expert the others defer to — "
     "hard rule: never route to the same friend two human-turns in a row. "
     "Whoever replied last turn is off the table now, no matter how "
@@ -327,9 +363,312 @@ async def _build_background_graph(checkpointer):
     return graph_builder.compile(checkpointer=checkpointer)
 
 
+# ---------------------------------------------------------------------------
+# Strategy 3: manager briefing first, then the friends debate each other
+# ---------------------------------------------------------------------------
+
+INTAKE_MAX_QUESTIONS = 3  # manager question messages before it must hand off
+DEBATE_MIN_HOPS = 8  # friend messages before a vote is allowed
+DEBATE_REOPEN_MIN_HOPS = 3  # same, when re-debating after a verdict
+DEBATE_MIN_HOPS_AFTER_USER = 3  # friends who react to new info from the human before a vote
+DEBATE_MAX_HOPS_PER_TURN = 16
+
+INTAKE_PROMPT = (
+    "You're the manager of a group chat of six friends — a pragmatist, a "
+    "skeptic, an optimist, an analyst, a contrarian, and a people person — "
+    "who are about to debate a decision for the human. Before you let them "
+    "loose, get the brief right. Ask about what actually matters for this "
+    "specific decision: the concrete options, the key numbers (money, time, "
+    "runway), hard constraints, what's at stake if it goes wrong, and their "
+    "gut lean. One or two short questions per message, never repeat a "
+    "question, casual and friendly (an emoji is fine). Don't share your own "
+    "opinion.\n\n"
+    "As soon as you have enough for a real argument, set ready=true — don't "
+    "interrogate them. Two or three rounds of questions is usually plenty, "
+    "and if their first message is already detailed you can go straight to "
+    "ready. If they say they want to skip the questions, ask at most one "
+    "round covering only what the group truly can't argue without."
+)
+
+INTAKE_WRAP_UP_NOTE = (
+    "\n\nYou've asked enough questions — set ready=true now and write the "
+    "brief from what you have."
+)
+
+DEBATE_ROUTER_PROMPT = (
+    "You silently run a friend group chat that's debating a decision the "
+    "human briefed you on — nobody sees you. After every message pick "
+    "exactly one: a friend (" + ", ".join(PERSONAS) + "), 'ask_user', or "
+    "'vote'.\n\n"
+    "Your goal is a real argument that goes somewhere. Pick whoever would "
+    "react most naturally and sharply to the last message: the friend who "
+    "was just tagged or challenged, the one who'd most disagree, or an angle "
+    "nobody has covered yet. Let disagreements play out across several "
+    "back-and-forths — a quick two-person exchange is fun — but spread turns "
+    "around so all six get a real say over the course of the debate.\n\n"
+    "Pick 'ask_user' only when the argument is genuinely stuck on a specific "
+    "fact only the human knows (a number, a constraint) and guessing would "
+    "make the debate pointless — then write the question. Never ask for "
+    "something the human already said or that's in the brief.\n\n"
+    "If everyone is agreeing too easily, don't vote yet — bring in whoever "
+    "is most likely to break the consensus (usually the contrarian or the "
+    "skeptic) and let the group defend it. Pick 'vote' once positions have "
+    "been stress-tested and the argument is starting to repeat itself."
+)
+
+DEBATE_REOPEN_NOTE = (
+    "\n\nThe group already voted and the manager gave a verdict earlier. "
+    "Let a few friends react to what the human just said. If it's new "
+    "information that could change the call, let them argue it out and "
+    "'vote' again; if it's just a follow-up or a thanks, keep it short and "
+    "use 'ask_user' to hand the chat back (the question can be a light "
+    "'anything else?')."
+)
+
+DEBATE_VOTE_CALL = "⏱️ ok time's up — everyone vote. ✅ do it, ❌ don't, 🤔 only if…"
+
+DEBATE_VERDICT_PROMPT = (
+    "You're the manager of this group chat. The friends just argued it out "
+    "and voted. Now post the final verdict to the human. Start with "
+    "'🧾 VERDICT:', then give one clear call: do it, don't, or do it only "
+    "if X. Give the vote tally, name the one or two points from the debate "
+    "that actually decided it (credit friends by @name), and the single "
+    "biggest risk to watch. If you side against the majority, say so and "
+    "why — you weigh arguments, you don't count heads. 4-6 sentences, "
+    "casual and direct, an emoji or two is fine, no headers or bullet lists."
+)
+
+
+def _mentioned_personas(message) -> list[str]:
+    text = message.content.lower() if isinstance(message.content, str) else ""
+    return [
+        p
+        for p in PERSONAS
+        if any(f"@{alias}" in text for alias in (p, p.replace("_", " "), p.replace("_", "")))
+    ]
+
+
+def _speakers_since_kickoff(messages) -> set[str]:
+    speakers = set()
+    for m in reversed(messages):
+        if m.additional_kwargs.get("kind") == "kickoff":
+            break
+        if getattr(m, "name", None) in PERSONAS and m.additional_kwargs.get("kind") != "vote":
+            speakers.add(m.name)
+    return speakers
+
+
+def _as_seen_by(name: str, messages) -> list:
+    """The chat from one friend's point of view. Every friend's reply is an
+    AIMessage, so passed through as-is each friend would read the whole
+    group's messages as things *it* said (and start moderating, or tagging
+    itself). Only its own messages stay as its turns; everyone else's become
+    labelled lines, the way a group chat actually reads."""
+    seen = []
+    for m in messages:
+        speaker = getattr(m, "name", None)
+        if m.type == "ai" and speaker == name:
+            seen.append(AIMessage(content=m.content))
+        elif m.type == "human":
+            seen.append(HumanMessage(content=f"human (the one deciding): {m.content}"))
+        else:
+            seen.append(HumanMessage(content=f"{speaker}: {m.content}"))
+    return seen
+
+
+def _next_in_rotation(last_speaker: str | None) -> str:
+    order = list(PERSONAS)
+    if last_speaker not in order:
+        return order[0]
+    return order[(order.index(last_speaker) + 1) % len(order)]
+
+
+async def _build_debate_graph(checkpointer):
+    llm = ChatOpenAI(model="gpt-5.6-luna", temperature=0, reasoning_effort="none")
+    # Banter needs some variety — at temperature 0 every friend's jokes land
+    # the same way every time.
+    persona_llm = ChatOpenAI(
+        model="gpt-5.6-luna", temperature=0.9, reasoning_effort="none"
+    ).bind(max_tokens=DEBATE_PERSONA_MAX_TOKENS)
+    intake_llm = llm.with_structured_output(IntakeDecision)
+    router = llm.with_structured_output(DebateDecision)
+
+    def route_by_phase(state: State):
+        return "router" if state.get("phase") == "debate" else "intake"
+
+    async def intake_node(state: State):
+        asked = sum(
+            1
+            for m in state["messages"]
+            if getattr(m, "name", None) == "manager"
+            and m.additional_kwargs.get("kind") == "to_user"
+        )
+        prompt = INTAKE_PROMPT
+        if asked >= INTAKE_MAX_QUESTIONS:
+            prompt += INTAKE_WRAP_UP_NOTE
+        decision = await intake_llm.ainvoke([SystemMessage(content=prompt), *state["messages"]])
+
+        if not decision.ready and asked < INTAKE_MAX_QUESTIONS:
+            question = AIMessage(
+                name="manager", content=decision.message, additional_kwargs={"kind": "to_user"}
+            )
+            return {"messages": [question], "phase": "intake"}
+
+        brief = decision.brief.strip()
+        content = f"{decision.message}\n\n**The brief:** {brief}" if brief else decision.message
+        kickoff = AIMessage(name="manager", content=content, additional_kwargs={"kind": "kickoff"})
+        return {"messages": [kickoff], "phase": "debate", "hop_count": 0, "debate_hops": 0}
+
+    def route_from_intake(state: State):
+        return "router" if state.get("phase") == "debate" else END
+
+    async def router_node(state: State):
+        messages = state["messages"]
+        last_speaker = _last_persona_speaker(messages)
+        hop_count = state.get("hop_count", 0)
+        debate_hops = state.get("debate_hops", 0)
+        min_hops = DEBATE_REOPEN_MIN_HOPS if state.get("verdict_given") else DEBATE_MIN_HOPS
+
+        called_out = []
+        if getattr(messages[-1], "name", None) in PERSONAS:
+            called_out = [p for p in _mentioned_personas(messages[-1]) if p != last_speaker]
+
+        prompt = DEBATE_ROUTER_PROMPT
+        if state.get("verdict_given"):
+            prompt += DEBATE_REOPEN_NOTE
+        if called_out:
+            prompt += (
+                f"\n\n{last_speaker} just tagged {', '.join(called_out)} — unless "
+                "the group is stuck on a missing fact, let them clap back next."
+            )
+        # Too early to vote until the debate has had real room — and until a
+        # few friends have reacted to whatever the human just told them.
+        vote_blocked = debate_hops < min_hops or hop_count < DEBATE_MIN_HOPS_AFTER_USER
+        if vote_blocked:
+            prompt += "\n\nIt's too early to vote — the group hasn't argued this enough yet. Don't pick 'vote'."
+        quiet = [p for p in PERSONAS if p not in _speakers_since_kickoff(messages)]
+        if quiet:
+            prompt += (
+                f"\n\nHaven't said anything in the debate yet: {', '.join(quiet)}. "
+                "Bring them in soon — nobody gets a third message before they've spoken."
+            )
+
+        decision = await _route_avoiding_repeat(router, prompt, messages, last_speaker)
+        next_speaker = decision.next
+
+        if next_speaker not in PERSONAS and next_speaker not in ("ask_user", "vote"):
+            next_speaker = called_out[0] if called_out else _next_in_rotation(last_speaker)
+        if next_speaker == "vote" and vote_blocked:
+            next_speaker = called_out[0] if called_out else _next_in_rotation(last_speaker)
+        if next_speaker == "ask_user" and (hop_count == 0 or not decision.question.strip()):
+            # Someone has to react to what the human just said before the
+            # manager interrupts again — and never interrupt with nothing.
+            next_speaker = _next_in_rotation(last_speaker)
+        if next_speaker in PERSONAS and hop_count >= DEBATE_MAX_HOPS_PER_TURN:
+            next_speaker = "vote"
+
+        return {
+            "next_speaker": next_speaker,
+            "pending_question": decision.question if next_speaker == "ask_user" else "",
+        }
+
+    def route_from_router(state: State):
+        speaker = state["next_speaker"]
+        if speaker in PERSONAS:
+            return speaker
+        return "call_vote" if speaker == "vote" else "ask_user"
+
+    def make_debate_persona_node(name: str, system_prompt: str):
+        async def persona_node(state: State):
+            context = [SystemMessage(content=system_prompt), *_as_seen_by(name, state["messages"])]
+            response = await persona_llm.ainvoke(context)
+            if not str(response.content).strip():
+                # The model occasionally returns nothing; one retry, then
+                # skip the turn rather than post an empty bubble.
+                response = await persona_llm.ainvoke(context)
+            counters = {
+                "hop_count": state.get("hop_count", 0) + 1,
+                "debate_hops": state.get("debate_hops", 0) + 1,
+            }
+            if not str(response.content).strip():
+                return counters
+            response.name = name
+            return {"messages": [response], **counters}
+
+        return persona_node
+
+    async def ask_user_node(state: State):
+        question = AIMessage(
+            name="manager",
+            content=state["pending_question"],
+            additional_kwargs={"kind": "to_user"},
+        )
+        return {"messages": [question], "hop_count": 0, "pending_question": ""}
+
+    async def call_vote_node(state: State):
+        call = AIMessage(
+            name="manager", content=DEBATE_VOTE_CALL, additional_kwargs={"kind": "vote_call"}
+        )
+        return {"messages": [call]}
+
+    async def vote_node(state: State):
+        async def cast(name: str, system_prompt: str):
+            response = await persona_llm.ainvoke(
+                [
+                    SystemMessage(content=system_prompt + DEBATE_VOTE_INSTRUCTION),
+                    *_as_seen_by(name, state["messages"]),
+                ]
+            )
+            response.name = name
+            response.additional_kwargs = {"kind": "vote"}
+            return response
+
+        votes = await asyncio.gather(*(cast(n, p) for n, p in DEBATE_PERSONAS.items()))
+        return {"messages": [v for v in votes if str(v.content).strip()]}
+
+    async def verdict_node(state: State):
+        response = await llm.ainvoke(
+            [SystemMessage(content=DEBATE_VERDICT_PROMPT), *state["messages"]]
+        )
+        response.name = "manager"
+        response.additional_kwargs = {"kind": "verdict"}
+        return {
+            "messages": [response],
+            "verdict_given": True,
+            "hop_count": 0,
+            "debate_hops": 0,
+        }
+
+    graph_builder = StateGraph(State)
+    graph_builder.add_node("intake", intake_node)
+    graph_builder.add_node("router", router_node)
+    graph_builder.add_node("ask_user", ask_user_node)
+    graph_builder.add_node("call_vote", call_vote_node)
+    graph_builder.add_node("vote", vote_node)
+    graph_builder.add_node("verdict", verdict_node)
+
+    graph_builder.add_conditional_edges(START, route_by_phase, ["intake", "router"])
+    graph_builder.add_conditional_edges("intake", route_from_intake, ["router", END])
+
+    for name, system_prompt in DEBATE_PERSONAS.items():
+        graph_builder.add_node(name, make_debate_persona_node(name, system_prompt))
+        graph_builder.add_edge(name, "router")
+
+    graph_builder.add_conditional_edges(
+        "router", route_from_router, list(PERSONAS) + ["ask_user", "call_vote"]
+    )
+    graph_builder.add_edge("ask_user", END)
+    graph_builder.add_edge("call_vote", "vote")
+    graph_builder.add_edge("vote", "verdict")
+    graph_builder.add_edge("verdict", END)
+
+    return graph_builder.compile(checkpointer=checkpointer)
+
+
 _BUILDERS = {
     "confidence": _build_confidence_graph,
     "background": _build_background_graph,
+    "debate": _build_debate_graph,
 }
 
 

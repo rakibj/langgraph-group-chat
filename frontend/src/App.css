@@ -244,6 +244,30 @@ html, body, #root {
   text-align: center;
 }
 
+.chat-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.6rem 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted-text);
+}
+
+.chat-divider::before,
+.chat-divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid color-mix(in srgb, var(--muted-text) 35%, transparent);
+}
+
+.bubble.assistant.vote-bubble {
+  font-size: 0.85rem;
+  padding: 0.35rem 0.8rem;
+}
+
 .strategy-chooser {
   margin: auto 0;
   display: flex;

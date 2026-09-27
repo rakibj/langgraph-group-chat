@@ -6,12 +6,22 @@ export async function checkHealth(): Promise<{ status: string }> {
   return res.json()
 }
 
-export type Strategy = 'confidence' | 'background'
+export type Strategy = 'confidence' | 'background' | 'debate'
+
+export type MessageKind =
+  | 'routing'
+  | 'to_user'
+  | 'to_verdict'
+  | 'verdict'
+  | 'kickoff'
+  | 'vote_call'
+  | 'vote'
+  | null
 
 export type PersonaReply = {
   persona: string
   content: string
-  kind: 'routing' | 'to_user' | 'to_verdict' | 'verdict' | null
+  kind: MessageKind
 }
 
 export async function sendMessage(
@@ -63,7 +73,7 @@ export type ThreadMessage = {
   role: 'user' | 'assistant'
   persona: string | null
   content: string
-  kind: 'routing' | 'to_user' | 'to_verdict' | 'verdict' | null
+  kind: MessageKind
 }
 
 export async function getThreadMessages(

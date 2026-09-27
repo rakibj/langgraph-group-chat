@@ -4,6 +4,7 @@ import {
   getThreadMessages,
   listThreads,
   sendMessage,
+  type MessageKind,
   type Strategy,
   type ThreadSummary,
 } from './api/client'
@@ -13,7 +14,7 @@ type Message = {
   role: 'user' | 'assistant'
   content: string
   persona?: string
-  kind?: 'routing' | 'to_user' | 'to_verdict' | 'verdict' | null
+  kind?: MessageKind
 }
 
 type View = 'list' | 'chat'
@@ -44,16 +45,19 @@ const PERSONA_COLORS: Record<string, string> = {
 const STRATEGY_LABELS: Record<Strategy, string> = {
   confidence: 'Manager thinks out loud',
   background: 'Friends only',
+  debate: 'Brief the manager, then let them fight',
 }
 
 const STRATEGY_HINTS: Record<Strategy, string> = {
   confidence: "You'll see who's being routed to and why, plus an explicit verdict when the group is confident.",
   background: 'No routing chatter — just the friends talking, with a final group take once they land somewhere.',
+  debate: 'The manager asks you what matters, then the six argue it out with each other, vote, and the manager calls it.',
 }
 
 const STRATEGY_BADGE: Record<Strategy, string> = {
   confidence: '🧠',
   background: '👥',
+  debate: '🔥',
 }
 
 const THEME_ICON: Record<Theme, string> = {
@@ -282,7 +286,7 @@ function App() {
         {!strategy && (
           <div className="strategy-chooser">
             <div className="strategy-chooser-title">How should this group run?</div>
-            {(['confidence', 'background'] as Strategy[]).map((s) => (
+            {(['confidence', 'background', 'debate'] as Strategy[]).map((s) => (
               <button
                 key={s}
                 type="button"
@@ -298,10 +302,14 @@ function App() {
           </div>
         )}
         {strategy && messages.length === 0 && (
-          <div className="chat-empty">Say something to start the conversation</div>
+          <div className="chat-empty">
+            {strategy === 'debate'
+              ? "Tell the manager what you're trying to decide"
+              : 'Say something to start the conversation'}
+          </div>
         )}
         {messages.map((m, i) => {
-          if (m.persona === 'manager' && m.kind === 'routing') {
+          if (m.persona === 'manager' && (m.kind === 'routing' || m.kind === 'vote_call')) {
             return (
               <div key={i} className="manager-note">
                 {m.content}
@@ -311,13 +319,14 @@ function App() {
 
           const color = m.persona ? PERSONA_COLORS[m.persona] : undefined
           const isHighlighted =
-            (m.persona === 'manager' && m.kind === 'to_user') || m.kind === 'verdict'
-          return (
+            (m.persona === 'manager' && (m.kind === 'to_user' || m.kind === 'kickoff')) ||
+            m.kind === 'verdict'
+          const bubble = (
             <div key={i} className={`bubble-row ${m.role}`}>
               <div
                 className={`bubble ${m.role}${isHighlighted ? ' manager-highlight' : ''}${
                   m.kind === 'verdict' ? ' verdict-bubble' : ''
-                }`}
+                }${m.kind === 'vote' ? ' vote-bubble' : ''}`}
                 style={color ? ({ '--accent': color } as CSSProperties) : undefined}
               >
                 {m.role === 'assistant' && m.persona && (
@@ -333,6 +342,13 @@ function App() {
               </div>
             </div>
           )
+          if (m.kind !== 'kickoff') return bubble
+          return [
+            bubble,
+            <div key={`${i}-divider`} className="chat-divider">
+              🔥 group chat started
+            </div>,
+          ]
         })}
         {sending && (
           <div className="bubble-row assistant">

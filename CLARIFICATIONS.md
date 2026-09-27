@@ -52,3 +52,26 @@ pure filter over a fixed set of possible speakers. Structured output keeps
 its only job (picking valid names) cheap and unambiguous, and the static
 graph + conditional-edge pattern makes future milestones (manager-asks-user,
 termination condition) additive rather than a rewrite.
+
+---
+
+### 2026-09-27 — Is the current thread on the "manager thinks out loud" strategy or "friends only"?
+
+**Q:** Is it on manager thinks out loud or friends only?
+
+**A:** As of M4 there are two selectable strategies (`app/graph.py`), fixed
+per-thread at creation via `threads.strategy` in the SQLite thread index and
+never changed mid-conversation:
+
+- **`confidence`** — the manager is a visible participant: its routing
+  decisions appear as their own chat bubble ("Routing to: Optimist — ..."),
+  and the final verdict is an explicit `AIMessage(name="manager", ...)`
+  attributed to the manager.
+- **`background`** — the manager's routing is never shown; personas appear
+  to talk to each other directly, and the verdict comes from a `group`
+  voice instead of a named manager.
+
+Checking `data/checkpoints.db`'s `threads` table directly (rather than
+assuming from `DEFAULT_STRATEGY`) showed the two most recent threads were
+both created with `strategy = 'confidence'` — so the current session is on
+the manager-visible strategy, not friends-only.
